@@ -1,3 +1,11 @@
+### Run
+
+```
+mvn clean package && java -Xmx8G -server -jar target/hsqldbbench-1.0-SNAPSHOT.jar
+```
+
+### Output
+
 ```
 May 09, 2019 9:20:21 AM com.mode.Benchmark main
 INFO: Total open time: 463ms

@@ -20,6 +20,20 @@
             <version>2.4.1</version>
         </dependency>
 
+        <!-- https://mvnrepository.com/artifact/org.voltdb/voltdb -->
+        <dependency>
+            <groupId>org.voltdb</groupId>
+            <artifactId>voltdb</artifactId>
+            <version>8.4.1</version>
+        </dependency>
+
+        <!-- https://mvnrepository.com/artifact/org.voltdb/voltdbclient -->
+        <dependency>
+            <groupId>org.voltdb</groupId>
+            <artifactId>voltdbclient</artifactId>
+            <version>8.4.1</version>
+        </dependency>
+
         <dependency>
             <groupId>com.univocity</groupId>
             <artifactId>univocity-parsers</artifactId>
