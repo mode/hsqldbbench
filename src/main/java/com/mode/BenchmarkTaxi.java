@@ -174,6 +174,8 @@ public class BenchmarkTaxi {
         final GZIPInputStream gzipInputStream = new GZIPInputStream(fileInputStream);
         final BufferedReader csvReader = new BufferedReader(new InputStreamReader(gzipInputStream));
 
+        System.out.println("Loading " + csvFilePath + " ...");
+
         inputParser.beginParsing(csvReader);
 
         Long rowCount = 0L;
