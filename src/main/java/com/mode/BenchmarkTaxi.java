@@ -49,12 +49,18 @@ public class BenchmarkTaxi {
 
     public static void main(String[] args) throws IOException, InterruptedException, ProcCallException {
         ClientConfig config = new ClientConfig();
+
+        config.setTopologyChangeAware(true);
         config.setReconnectOnConnectionLoss(true);
         Client voltClient = ClientFactory.createClient(config);
         ExecutorService ingestExecutor = Executors.newFixedThreadPool(24);
 
         long connectStartTime = System.currentTimeMillis();
-        voltClient.createConnection("localhost", 21212);
+//        voltClient.createConnection("localhost", 21212);
+        voltClient.createConnection("ip-10-77-2-149.us-west-2.compute.internal", 21212);
+        voltClient.createConnection("ip-10-77-2-77.us-west-2.compute.internal", 21212);
+        voltClient.createConnection("ip-10-77-2-154.us-west-2.compute.internal", 21212);
+
         long connectionEndTime = System.currentTimeMillis();
 
         System.out.println("Total open time: " + (connectionEndTime - connectStartTime) + "ms");
@@ -195,7 +201,7 @@ public class BenchmarkTaxi {
 
         Integer colNum = 0;
         Integer partMin = 1;
-        Integer partCount = 720;
+        Integer partCount = 192;
         Random partRandom = new Random();
 
         String[] csvRow;
