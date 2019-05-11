@@ -4,18 +4,13 @@ import com.univocity.parsers.csv.CsvParser;
 import com.univocity.parsers.csv.CsvParserSettings;
 import org.joda.time.format.DateTimeFormat;
 import org.joda.time.format.DateTimeFormatter;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.voltdb.client.Client;
-import org.voltdb.client.ClientFactory;
-import org.voltdb.client.ClientResponse;
+import org.voltdb.client.*;
 import org.voltdb.client.VoltBulkLoader.BulkLoaderFailureCallBack;
 import org.voltdb.client.VoltBulkLoader.VoltBulkLoader;
 
 import java.io.*;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
-import java.sql.*;
 import java.util.*;
 import java.util.zip.GZIPInputStream;
 
@@ -24,7 +19,6 @@ public class BenchmarkTaxi {
         INTEGER, DOUBLE, STRING, TIMESTAMP
     }
 
-    private final static Logger LOGGER = LoggerFactory.getLogger(Benchmark.class);
     private final static DateTimeFormatter dtFormat = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss");
 
     private final static Map<String, DataType> schema = new LinkedHashMap<String, DataType>() {{
@@ -47,82 +41,73 @@ public class BenchmarkTaxi {
         put("total_amount", DataType.DOUBLE);
     }};
 
-    public static void main(String[] args) throws IOException, InterruptedException {
-        Client voltClient = null;
-        Connection connection = null;
+    public static void main(String[] args) throws IOException, InterruptedException, ProcCallException {
+        Client voltClient = ClientFactory.createClient();
 
-        try {
-            long connectStartTime = System.currentTimeMillis();
+        long connectStartTime = System.currentTimeMillis();
+        voltClient.createConnection("localhost", 21212);
+        long connectionEndTime = System.currentTimeMillis();
 
-            voltClient = ClientFactory.createClient();
-            voltClient.createConnection("localhost", 21212);
-            connection = DriverManager.getConnection("jdbc:voltdb://localhost:21212?autoreconnect=true");
+        System.out.println("Total open time: " + (connectionEndTime - connectStartTime) + "ms");
 
-            long connectionEndTime = System.currentTimeMillis();
+        long clearStartTime = System.currentTimeMillis();
+        clearTable(voltClient, "trips");
+        long clearEndTime = System.currentTimeMillis();
 
-            LOGGER.info("Total open time: " + (connectionEndTime - connectStartTime) + "ms");
+        System.out.println("Total clear time: " + (clearEndTime - clearStartTime) + "ms");
 
-            long ingestStartTime = System.currentTimeMillis();
+        long ingestStartTime = System.currentTimeMillis();
 
-            Long lastRowCount = 0L;
-            for (String csvFilePath : getCsvPaths()) {
-                lastRowCount = ingestCsvFile(voltClient, schema, "trips", csvFilePath, lastRowCount);
-            }
-
-            long ingestEndTime = System.currentTimeMillis();
-
-            LOGGER.info("Total ingest time: " + (ingestEndTime - ingestStartTime) + "ms");
-
-            long tableStartTime = System.currentTimeMillis();
-            executeTableQuery(connection, "trips");
-            long tableEndTime = System.currentTimeMillis();
-
-            LOGGER.info("Offset time (warmup): " + (tableEndTime - tableStartTime) + "ms");
-
-            tableStartTime = System.currentTimeMillis();
-            executeTableQuery(connection, "trips");
-            tableEndTime = System.currentTimeMillis();
-
-            LOGGER.info("Offset time (warmed): " + (tableEndTime - tableStartTime) + "ms");
-
-            long pivotStartTime = System.currentTimeMillis();
-            executePivotQuery(connection, "trips");
-            long pivotEndTime = System.currentTimeMillis();
-
-            LOGGER.info("Pivot time (warmup): " + (pivotEndTime - pivotStartTime) + "ms");
-
-            pivotStartTime = System.currentTimeMillis();
-            executePivotQuery(connection, "trips");
-            pivotEndTime = System.currentTimeMillis();
-
-            LOGGER.info("Pivot time (warmed): " + (pivotEndTime - pivotStartTime) + "ms");
-
-            // Clean up
-            voltClient.close();
-            connection.close();
-        } catch (SQLException e) {
-            LOGGER.error(e.getMessage());
-        } finally {
-            try {
-                // Close connection
-                if (connection != null)
-                    connection.close();
-            } catch (SQLException e) {
-                LOGGER.error(e.getMessage());
-            }
+        Long lastRowCount = 0L;
+        for (String csvFilePath : getCsvPaths()) {
+            lastRowCount = ingestCsvFile(voltClient, schema, "trips", csvFilePath, lastRowCount);
         }
+
+        long ingestEndTime = System.currentTimeMillis();
+
+        System.out.println("Total ingest time: " + (ingestEndTime - ingestStartTime) + "ms");
+
+        long tableStartTime = System.currentTimeMillis();
+        executeTableQuery(voltClient, "trips");
+        long tableEndTime = System.currentTimeMillis();
+
+        System.out.println("Offset time (warmup): " + (tableEndTime - tableStartTime) + "ms");
+
+        tableStartTime = System.currentTimeMillis();
+        executeTableQuery(voltClient, "trips");
+        tableEndTime = System.currentTimeMillis();
+
+        System.out.println("Offset time (warmed): " + (tableEndTime - tableStartTime) + "ms");
+
+        long pivotStartTime = System.currentTimeMillis();
+        executePivotQuery(voltClient, "trips");
+        long pivotEndTime = System.currentTimeMillis();
+
+        System.out.println("Pivot time (warmup): " + (pivotEndTime - pivotStartTime) + "ms");
+
+        pivotStartTime = System.currentTimeMillis();
+        executePivotQuery(voltClient, "trips");
+        pivotEndTime = System.currentTimeMillis();
+
+        System.out.println("Pivot time (warmed): " + (pivotEndTime - pivotStartTime) + "ms");
+
+        // Clean up
+        voltClient.close();
+    }
+
+    /**
+     * Setup
+     */
+
+    private static ClientResponse clearTable(Client voltClient, String tableName) throws IOException, ProcCallException {
+        String deletetSql = "DELETE FROM " + tableName;
+        System.out.println(deletetSql);
+        return voltClient.callProcedure("@AdHoc", deletetSql);
     }
 
     /**
      * Ingestion
      */
-
-    private static class LoadFailureCallback implements BulkLoaderFailureCallBack {
-        @Override
-        public void failureCallback(Object rowHandle, Object[] fieldList, ClientResponse response) {
-            LOGGER.error("Failed to insert row " + rowHandle + " " + response.getStatusString());
-        }
-    }
 
     private static Double toDouble(String value) {
         return value == null ? null : Double.parseDouble(value);
@@ -159,11 +144,18 @@ public class BenchmarkTaxi {
         return filePaths;
     }
 
+    private static class LoadFailureCallback implements BulkLoaderFailureCallBack {
+        @Override
+        public void failureCallback(Object rowHandle, Object[] fieldList, ClientResponse response) {
+            System.out.println("Failed to insert row " + rowHandle + " " + response.getStatusString());
+        }
+    }
+
     private static Long ingestCsvFile(Client voltClient, Map<String, DataType> schema, String tableName, String csvFilePath, Long lastRowCount) throws IOException, InterruptedException {
-        Integer batchSize = 325000;
         VoltBulkLoader loader = null;
+
         try {
-            // new SessionBulkloaderFailureCallback();
+            Integer batchSize = 325000;
             loader = voltClient.getNewBulkLoader(tableName, batchSize, new LoadFailureCallback());
         } catch (Exception e) {
             throw new RuntimeException("Could not create new bulk loader", e);
@@ -247,31 +239,20 @@ public class BenchmarkTaxi {
      * Selection
      */
 
-    private static void executeTableQuery(Connection connection, String tableName) throws SQLException {
+    private static ClientResponse executeTableQuery(Client voltClient, String tableName) throws IOException, ProcCallException {
         String selectSql = "SELECT id FROM " + tableName + " LIMIT 100 OFFSET 320000";
-
-        LOGGER.info(selectSql);
-
-        Statement statement = connection.createStatement();
-        ResultSet selectResult = statement.executeQuery(selectSql);
-
-        statement.close();
-        selectResult.close();
+        System.out.println(selectSql);
+        return voltClient.callProcedure("@AdHoc", selectSql);
     }
 
-    private static void executePivotQuery(Connection connection, String tableName) throws SQLException {
+    private static ClientResponse executePivotQuery(Client voltClient, String tableName) throws IOException, ProcCallException {
         String selectSql =
                 "SELECT vendor_id, rate_code_id, COUNT(1)" +
                 "FROM " + tableName + " " +
-                "GROUP BY vendor_id, rate_code_id" +
-                "ORDER BY vendor_id, rate_code_id";
+                "GROUP BY vendor_id, rate_code_id " +
+                "ORDER BY vendor_id, rate_code_id ";
 
-        LOGGER.info(selectSql);
-
-        Statement statement = connection.createStatement();
-        ResultSet selectResult = statement.executeQuery(selectSql);
-
-        statement.close();
-        selectResult.close();
+        System.out.println(selectSql);
+        return voltClient.callProcedure("@AdHoc", selectSql);
     }
 }
