@@ -12,12 +12,18 @@ import java.io.*;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.zip.GZIPInputStream;
 
 public class BenchmarkTaxi {
     private enum DataType {
         INTEGER, DOUBLE, STRING, TIMESTAMP
     }
+
+    private static AtomicLong rowId = new AtomicLong(0);
 
     private final static DateTimeFormatter dtFormat = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss");
 
@@ -42,7 +48,10 @@ public class BenchmarkTaxi {
     }};
 
     public static void main(String[] args) throws IOException, InterruptedException, ProcCallException {
-        Client voltClient = ClientFactory.createClient();
+        ClientConfig config = new ClientConfig();
+        config.setReconnectOnConnectionLoss(true);
+        Client voltClient = ClientFactory.createClient(config);
+        ExecutorService ingestExecutor = Executors.newFixedThreadPool(24);
 
         long connectStartTime = System.currentTimeMillis();
         voltClient.createConnection("localhost", 21212);
@@ -58,10 +67,19 @@ public class BenchmarkTaxi {
 
         long ingestStartTime = System.currentTimeMillis();
 
-        Long lastRowCount = 0L;
         for (String csvFilePath : getCsvPaths()) {
-            lastRowCount = ingestCsvFile(voltClient, schema, "trips", csvFilePath, lastRowCount);
+            ingestExecutor.submit(() -> {
+                try {
+                    System.out.println("Loading " + csvFilePath + " ...");
+                    ingestCsvFile(voltClient, schema, "trips", csvFilePath);
+                } catch (IOException|InterruptedException ioException) {
+                    throw new RuntimeException("Cannot ingest csv file " + csvFilePath, ioException);
+                }
+            });
         }
+
+        ingestExecutor.shutdown();
+        ingestExecutor.awaitTermination(30, TimeUnit.MINUTES);
 
         long ingestEndTime = System.currentTimeMillis();
 
@@ -125,7 +143,6 @@ public class BenchmarkTaxi {
         final PathMatcher matcher = FileSystems.getDefault().getPathMatcher("glob:**/yellow*{2017,2018}*.csv.gz");
 
         ArrayList<String> filePaths = new ArrayList<>();
-
         Files.walkFileTree(Paths.get("data/"), new SimpleFileVisitor<Path>() {
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
@@ -151,11 +168,11 @@ public class BenchmarkTaxi {
         }
     }
 
-    private static Long ingestCsvFile(Client voltClient, Map<String, DataType> schema, String tableName, String csvFilePath, Long lastRowCount) throws IOException, InterruptedException {
-        VoltBulkLoader loader = null;
+    private static void ingestCsvFile(Client voltClient, Map<String, DataType> schema, String tableName, String csvFilePath) throws IOException, InterruptedException {
+        VoltBulkLoader loader;
 
         try {
-            Integer batchSize = 325000;
+            Integer batchSize = 1024;
             loader = voltClient.getNewBulkLoader(tableName, batchSize, new LoadFailureCallback());
         } catch (Exception e) {
             throw new RuntimeException("Could not create new bulk loader", e);
@@ -174,11 +191,8 @@ public class BenchmarkTaxi {
         final GZIPInputStream gzipInputStream = new GZIPInputStream(fileInputStream);
         final BufferedReader csvReader = new BufferedReader(new InputStreamReader(gzipInputStream));
 
-        System.out.println("Loading " + csvFilePath + " ...");
-
         inputParser.beginParsing(csvReader);
 
-        Long rowCount = 0L;
         Integer colNum = 0;
         Integer partMin = 1;
         Integer partCount = 720;
@@ -187,12 +201,11 @@ public class BenchmarkTaxi {
         String[] csvRow;
         List<Object> voltRow;
         while ((csvRow = inputParser.parseNext()) != null) {
-            Long rowId = rowCount + lastRowCount + 1;
             voltRow = new ArrayList<>(schema.size());
             Iterator colIter = schema.entrySet().iterator();
 
             // Set Partition
-            voltRow.add(rowId);
+            voltRow.add(rowId.incrementAndGet());
             voltRow.add(partRandom.nextInt((partCount - partMin) + 1) + partMin);
 
             while (colIter.hasNext()) {
@@ -218,8 +231,6 @@ public class BenchmarkTaxi {
             }
 
             colNum = 0;
-            rowCount += 1;
-
             loader.insertRow(rowId, voltRow.toArray());
         }
 
@@ -232,8 +243,6 @@ public class BenchmarkTaxi {
         } catch (Exception e) {
             throw new RuntimeException("Couldn't close bulk loader", e);
         }
-
-        return rowCount;
     }
 
 
@@ -249,7 +258,7 @@ public class BenchmarkTaxi {
 
     private static ClientResponse executePivotQuery(Client voltClient, String tableName) throws IOException, ProcCallException {
         String selectSql =
-                "SELECT vendor_id, rate_code_id, COUNT(1)" +
+                "SELECT vendor_id, rate_code_id, COUNT(1) " +
                 "FROM " + tableName + " " +
                 "GROUP BY vendor_id, rate_code_id " +
                 "ORDER BY vendor_id, rate_code_id ";
