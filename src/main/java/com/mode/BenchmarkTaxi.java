@@ -60,6 +60,8 @@ public class BenchmarkTaxi {
         voltClient.createConnection("ip-10-77-2-149.us-west-2.compute.internal", 21212);
         voltClient.createConnection("ip-10-77-2-77.us-west-2.compute.internal", 21212);
         voltClient.createConnection("ip-10-77-2-154.us-west-2.compute.internal", 21212);
+        voltClient.createConnection("ip-10-77-2-116.us-west-2.compute.internal", 21212);
+        voltClient.createConnection("ip-10-77-2-59.us-west-2.compute.internal", 21212);
 
         long connectionEndTime = System.currentTimeMillis();
 
