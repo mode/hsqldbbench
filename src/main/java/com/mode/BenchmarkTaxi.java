@@ -6,116 +6,99 @@ import org.joda.time.format.DateTimeFormat;
 import org.joda.time.format.DateTimeFormatter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.voltdb.client.Client;
+import org.voltdb.client.ClientFactory;
+import org.voltdb.client.ClientResponse;
+import org.voltdb.client.VoltBulkLoader.BulkLoaderFailureCallBack;
+import org.voltdb.client.VoltBulkLoader.VoltBulkLoader;
 
 import java.io.*;
+import java.nio.file.*;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.sql.*;
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.*;
 import java.util.zip.GZIPInputStream;
 
 public class BenchmarkTaxi {
     private enum DataType {
-        INTEGER, FLOAT, STRING, TIMESTAMP
+        INTEGER, DOUBLE, STRING, TIMESTAMP
     }
 
-    private final static String csvPath = "data/orders.csv.gz";
     private final static Logger LOGGER = LoggerFactory.getLogger(Benchmark.class);
     private final static DateTimeFormatter dtFormat = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss");
 
     private final static Map<String, DataType> schema = new LinkedHashMap<String, DataType>() {{
-        put("row_number", DataType.INTEGER);
-        put("order_id", DataType.INTEGER);
-        put("order_gloss_qty", DataType.INTEGER);
-        put("order_gloss_amt_usd", DataType.FLOAT);
-        put("order_poster_qty", DataType.INTEGER);
-        put("order_poster_amt_usd", DataType.FLOAT);
-        put("order_standard_qty", DataType.INTEGER);
-        put("order_standard_amt_usd", DataType.FLOAT);
-        put("order_total_qty", DataType.INTEGER);
-        put("order_total_amt_usd", DataType.FLOAT);
-        put("order_created_date", DataType.TIMESTAMP);
-        put("order_created_year", DataType.INTEGER);
-        put("order_created_quarter", DataType.INTEGER);
-        put("order_created_month", DataType.INTEGER);
-        put("order_created_month_name", DataType.STRING);
-        put("order_created_week", DataType.INTEGER);
-        put("order_created_day", DataType.INTEGER);
-        put("order_created_do_w", DataType.INTEGER);
-        put("order_created_do_w_name", DataType.STRING);
-        put("order_created_hour", DataType.INTEGER);
-        put("account_id", DataType.INTEGER);
-        put("account_lat", DataType.FLOAT);
-        put("account_lon", DataType.FLOAT);
-        put("account_name", DataType.STRING);
-        put("account_website", DataType.STRING);
-        put("account_primary_contact", DataType.STRING);
-        put("web_event_id", DataType.INTEGER);
-        put("web_event_channel", DataType.STRING);
-        put("web_event_occurred_date", DataType.TIMESTAMP);
-        put("web_event_occurred_year", DataType.INTEGER);
-        put("web_event_occurred_quarter", DataType.INTEGER);
-        put("web_event_occurred_month", DataType.INTEGER);
-        put("web_event_created_occurred_name", DataType.STRING);
-        put("web_event_occurred_week", DataType.INTEGER);
-        put("web_event_occurred_day", DataType.INTEGER);
-        put("web_event_occurred_do_w", DataType.INTEGER);
-        put("web_event_occurred_do_w_name", DataType.STRING);
-        put("web_event_occurred_hour", DataType.INTEGER);
-        put("sales_rep_id", DataType.INTEGER);
-        put("sales_rep_name", DataType.STRING);
-        put("region_id", DataType.INTEGER);
-        put("region_name", DataType.STRING);
+        put("vendor_id", DataType.INTEGER);
+        put("pickup_datetime", DataType.TIMESTAMP);
+        put("dropoff_datetime", DataType.TIMESTAMP);
+        put("passenger_count", DataType.INTEGER);
+        put("trip_distance", DataType.DOUBLE);
+        put("rate_code_id", DataType.INTEGER);
+        put("store_and_fwd_flag", DataType.STRING);
+        put("dropoff_longitude", DataType.DOUBLE);
+        put("dropoff_latitude", DataType.DOUBLE);
+        put("payment_type", DataType.INTEGER);
+        put("fare_amount", DataType.DOUBLE);
+        put("extra", DataType.DOUBLE);
+        put("mta_tax", DataType.DOUBLE);
+        put("tip_amount", DataType.DOUBLE);
+        put("tolls_amount", DataType.DOUBLE);
+        put("improvement_surcharge", DataType.DOUBLE);
+        put("total_amount", DataType.DOUBLE);
     }};
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws IOException, InterruptedException {
+        Client voltClient = null;
         Connection connection = null;
 
         try {
             long connectStartTime = System.currentTimeMillis();
+
+            voltClient = ClientFactory.createClient();
+            voltClient.createConnection("localhost", 21212);
             connection = DriverManager.getConnection("jdbc:voltdb://localhost:21212?autoreconnect=true");
+
             long connectionEndTime = System.currentTimeMillis();
 
             LOGGER.info("Total open time: " + (connectionEndTime - connectStartTime) + "ms");
 
-            long createStartTime = System.currentTimeMillis();
-            createTable(connection, schema);
-            long createEndTime = System.currentTimeMillis();
-
-            LOGGER.info("Total create time: " + (createEndTime - createStartTime) + "ms");
-
             long ingestStartTime = System.currentTimeMillis();
-            ingestData(connection, schema);
+
+            Long lastRowCount = 0L;
+            for (String csvFilePath : getCsvPaths()) {
+                lastRowCount = ingestCsvFile(voltClient, schema, "trips", csvFilePath, lastRowCount);
+            }
+
             long ingestEndTime = System.currentTimeMillis();
 
             LOGGER.info("Total ingest time: " + (ingestEndTime - ingestStartTime) + "ms");
 
             long tableStartTime = System.currentTimeMillis();
-            executeTableQuery(connection);
+            executeTableQuery(connection, "trips");
             long tableEndTime = System.currentTimeMillis();
 
             LOGGER.info("Offset time (warmup): " + (tableEndTime - tableStartTime) + "ms");
 
             tableStartTime = System.currentTimeMillis();
-            executeTableQuery(connection);
+            executeTableQuery(connection, "trips");
             tableEndTime = System.currentTimeMillis();
 
             LOGGER.info("Offset time (warmed): " + (tableEndTime - tableStartTime) + "ms");
 
             long pivotStartTime = System.currentTimeMillis();
-            executePivotQuery(connection);
+            executePivotQuery(connection, "trips");
             long pivotEndTime = System.currentTimeMillis();
 
             LOGGER.info("Pivot time (warmup): " + (pivotEndTime - pivotStartTime) + "ms");
 
             pivotStartTime = System.currentTimeMillis();
-            executePivotQuery(connection);
+            executePivotQuery(connection, "trips");
             pivotEndTime = System.currentTimeMillis();
 
             LOGGER.info("Pivot time (warmed): " + (pivotEndTime - pivotStartTime) + "ms");
 
             // Clean up
+            voltClient.close();
             connection.close();
         } catch (SQLException e) {
             LOGGER.error(e.getMessage());
@@ -130,83 +113,61 @@ public class BenchmarkTaxi {
         }
     }
 
-    private static void createTable(Connection connection, Map<String, DataType> schema) throws SQLException {
-        Iterator colIter = schema.entrySet().iterator();
-        ArrayList<String> columnDefs = new ArrayList<String>();
+    /**
+     * Ingestion
+     */
 
-        while (colIter.hasNext()) {
-            Map.Entry pair = (Map.Entry) colIter.next();
+    private static class LoadFailureCallback implements BulkLoaderFailureCallBack {
+        @Override
+        public void failureCallback(Object rowHandle, Object[] fieldList, ClientResponse response) {
+            LOGGER.error("Failed to insert row " + rowHandle + " " + response.getStatusString());
+        }
+    }
 
-            switch((DataType) pair.getValue()) {
-                case INTEGER:
-                    columnDefs.add(pair.getKey().toString() + " INTEGER");
-                    break;
-                case FLOAT:
-                    columnDefs.add(pair.getKey().toString() + " FLOAT");
-                    break;
-                case STRING:
-                    columnDefs.add(pair.getKey().toString() + " VARCHAR(1024)");
-                    break;
-                case TIMESTAMP:
-                    columnDefs.add(pair.getKey().toString() + " TIMESTAMP");
-                    break;
+    private static Double toDouble(String value) {
+        return value == null ? null : Double.parseDouble(value);
+    }
+
+    private static Integer toInteger(String value) {
+        return value == null ? null : Math.round(Float.parseFloat(value));
+    }
+
+    private static Long toTimestamp(String dtString) {
+        return dtFormat.parseDateTime(dtString).getMillis() * 1000L;
+    }
+
+    private static List<String> getCsvPaths() throws IOException {
+        final PathMatcher matcher = FileSystems.getDefault().getPathMatcher("glob:**/yellow*{2017,2018}*.csv.gz");
+
+        ArrayList<String> filePaths = new ArrayList<>();
+
+        Files.walkFileTree(Paths.get("data/"), new SimpleFileVisitor<Path>() {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                if (matcher.matches(file)) {
+                    filePaths.add(file.toString());
+                }
+                return FileVisitResult.CONTINUE;
             }
+
+            @Override
+            public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
+                return FileVisitResult.CONTINUE;
+            }
+        });
+
+        return filePaths;
+    }
+
+    private static Long ingestCsvFile(Client voltClient, Map<String, DataType> schema, String tableName, String csvFilePath, Long lastRowCount) throws IOException, InterruptedException {
+        Integer batchSize = 325000;
+        VoltBulkLoader loader = null;
+        try {
+            // new SessionBulkloaderFailureCallback();
+            loader = voltClient.getNewBulkLoader(tableName, batchSize, new LoadFailureCallback());
+        } catch (Exception e) {
+            throw new RuntimeException("Could not create new bulk loader", e);
         }
-
-        String createSql = "CREATE TABLE orders(" + String.join(", ", columnDefs) + ")";
-
-        LOGGER.info(createSql);
-        
-        // Create and execute statement
-        Statement statement = connection.createStatement();
-        ResultSet createResult = statement.executeQuery(createSql);
-
-        statement.close();
-        createResult.close();
-    }
-
-    private static void executeTableQuery(Connection connection) throws SQLException {
-        String selectSql = "SELECT * FROM orders LIMIT 100 OFFSET 320000";
-
-        LOGGER.info(selectSql);
-
-        Statement statement = connection.createStatement();
-        ResultSet selectResult = statement.executeQuery(selectSql);
-
-        statement.close();
-        selectResult.close();
-    }
-
-    private static void executePivotQuery(Connection connection) throws SQLException {
-        String selectSql =
-                "SELECT region_name, sales_rep_name, COUNT(1) " +
-                        "FROM orders " +
-                        "GROUP BY region_name, sales_rep_name " +
-                        "ORDER BY region_name, sales_rep_name";
-
-        LOGGER.info(selectSql);
-
-        Statement statement = connection.createStatement();
-        ResultSet selectResult = statement.executeQuery(selectSql);
-
-        statement.close();
-        selectResult.close();
-    }
-
-    private static void ingestData(Connection connection, Map<String, DataType> schema) throws IOException, SQLException {
-        // Build Parameterized Insert
-        ArrayList<String> paramDefs = new ArrayList<String>();
-        Iterator paramIter = schema.entrySet().iterator();
-
-        while (paramIter.hasNext()) {
-            paramIter.next();
-            paramDefs.add("?");
-        }
-
-        String paramSql = "INSERT INTO orders VALUES(" + String.join(",", paramDefs)+ ")";
-
-        LOGGER.info(paramSql);
-        PreparedStatement statement = connection.prepareStatement(paramSql);
 
         /// Setup Parser
         final CsvParserSettings settings = new CsvParserSettings();
@@ -215,69 +176,102 @@ public class BenchmarkTaxi {
 
         final CsvParser inputParser = new CsvParser(settings);
 
-        String[] row;
-        Integer colNum = 0;
-        Integer rowNum = 0;
-        Integer batchSize = 325000;
-
         // Begin Parsing
-        final File csvFile = new File(csvPath);
+        final File csvFile = new File(csvFilePath);
         final InputStream fileInputStream = new FileInputStream(csvFile);
         final GZIPInputStream gzipInputStream = new GZIPInputStream(fileInputStream);
         final BufferedReader csvReader = new BufferedReader(new InputStreamReader(gzipInputStream));
 
         inputParser.beginParsing(csvReader);
 
-        while ((row = inputParser.parseNext()) != null) {
+        Long rowCount = 0L;
+        Integer colNum = 0;
+        Integer partMin = 1;
+        Integer partCount = 720;
+        Random partRandom = new Random();
+
+        String[] csvRow;
+        List<Object> voltRow;
+        while ((csvRow = inputParser.parseNext()) != null) {
+            Long rowId = rowCount + lastRowCount + 1;
+            voltRow = new ArrayList<>(schema.size());
             Iterator colIter = schema.entrySet().iterator();
 
+            // Set Partition
+            voltRow.add(rowId);
+            voltRow.add(partRandom.nextInt((partCount - partMin) + 1) + partMin);
+
             while (colIter.hasNext()) {
-                String rowValue = row[colNum];
+                String rowValue = csvRow[colNum];
                 Map.Entry pair = (Map.Entry) colIter.next();
 
                 switch((DataType) pair.getValue()) {
                     case STRING:
-                        statement.setString(colNum + 1, rowValue);
+                        voltRow.add(rowValue);
                         break;
                     case INTEGER:
-                        statement.setInt(colNum + 1, toInteger(rowValue));
+                        voltRow.add(toInteger(rowValue));
                         break;
-                    case FLOAT:
-                        statement.setFloat(colNum + 1, toFloat(rowValue));
+                    case DOUBLE:
+                        voltRow.add(toDouble(rowValue));
                         break;
                     case TIMESTAMP:
-                        statement.setTimestamp(colNum + 1, toTimestamp(rowValue));
+                        voltRow.add(toTimestamp(rowValue));
                         break;
                 }
 
                 colNum += 1;
             }
 
-            statement.addBatch();
-
-            if (rowNum % batchSize == 0) {
-                statement.executeBatch();
-            }
-
             colNum = 0;
-            rowNum += 1;
+            rowCount += 1;
+
+            loader.insertRow(rowId, voltRow.toArray());
         }
 
         // Cleanup
         inputParser.stopParsing();
-        statement.executeBatch();
+
+        try {
+            loader.drain();
+            loader.close();
+        } catch (Exception e) {
+            throw new RuntimeException("Couldn't close bulk loader", e);
+        }
+
+        return rowCount;
+    }
+
+
+    /**
+     * Selection
+     */
+
+    private static void executeTableQuery(Connection connection, String tableName) throws SQLException {
+        String selectSql = "SELECT id FROM " + tableName + " LIMIT 100 OFFSET 320000";
+
+        LOGGER.info(selectSql);
+
+        Statement statement = connection.createStatement();
+        ResultSet selectResult = statement.executeQuery(selectSql);
+
         statement.close();
+        selectResult.close();
     }
 
-    private static Float toFloat(String fString) {
-        return Float.parseFloat(fString);
-    }
+    private static void executePivotQuery(Connection connection, String tableName) throws SQLException {
+        String selectSql =
+                "SELECT vendor_id, rate_code_id, COUNT(1)" +
+                "FROM " + tableName + " " +
+                "GROUP BY vendor_id, rate_code_id" +
+                "ORDER BY vendor_id, rate_code_id";
 
-    private static Integer toInteger(String fString) {
-        return Math.round(toFloat(fString));
-    }
+        LOGGER.info(selectSql);
 
-    private static Timestamp toTimestamp(String dtString) {
-        return new Timestamp(dtFormat.parseDateTime(dtString).getMillis() / 1000L);
+        Statement statement = connection.createStatement();
+        ResultSet selectResult = statement.executeQuery(selectSql);
+
+        statement.close();
+        selectResult.close();
     }
 }

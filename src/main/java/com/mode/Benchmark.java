@@ -142,7 +142,7 @@ public class Benchmark {
                     columnDefs.add(pair.getKey().toString() + " INTEGER");
                     break;
                 case FLOAT:
-                    columnDefs.add(pair.getKey().toString() + " FLOAT");
+                    columnDefs.add(pair.getKey().toString() + " DOUBLE");
                     break;
                 case STRING:
                     columnDefs.add(pair.getKey().toString() + " VARCHAR(1024)");
