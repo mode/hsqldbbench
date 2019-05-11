@@ -22,7 +22,7 @@ public class Benchmark {
     private final static Logger LOGGER = LoggerFactory.getLogger(Benchmark.class);
     private final static DateTimeFormatter dtFormat = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss");
 
-    private final static Map<String, DataType> schema = new LinkedHashMap<>() {{
+    private final static Map<String, DataType> schema = new LinkedHashMap<String, DataType>() {{
         put("row_number", DataType.INTEGER);
         put("order_id", DataType.INTEGER);
         put("order_gloss_qty", DataType.INTEGER);
@@ -130,7 +130,7 @@ public class Benchmark {
 
     private static void createTable(Connection connection, Map<String, DataType> schema) throws SQLException {
         Iterator colIter = schema.entrySet().iterator();
-        ArrayList<String> columnDefs = new ArrayList<>();
+        ArrayList<String> columnDefs = new ArrayList<String>();
 
         while (colIter.hasNext()) {
             Map.Entry pair = (Map.Entry) colIter.next();
@@ -193,7 +193,7 @@ public class Benchmark {
 
     private static void ingestData(Connection connection, Map<String, DataType> schema) throws IOException, SQLException {
         // Build Parameterized Insert
-        ArrayList<String> paramDefs = new ArrayList<>();
+        ArrayList<String> paramDefs = new ArrayList<String>();
         Iterator paramIter = schema.entrySet().iterator();
 
         while (paramIter.hasNext()) {
