@@ -203,7 +203,7 @@ public class BenchmarkTaxi {
 
         Integer colNum = 0;
         Integer partMin = 1;
-        Integer partCount = 192;
+        Integer partCount = 320;
         Random partRandom = new Random();
 
         String[] csvRow;
