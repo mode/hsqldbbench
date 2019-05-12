@@ -99,15 +99,9 @@ public class BenchmarkTaxi {
 
         System.out.println("Index Build Time: " + (indexEndTime - indexStartTime) + "ms");
 
-        Long values = 0L;
-        for (Long key : columnIndex.keys()) {
-            int cardinality = columnIndex.get(key).getIntCardinality();
-
-            values += cardinality;
-            System.out.println("Index (key, values) => (" + key + ", " + cardinality + ")");
-        }
-
-        System.out.println("Index contains " + values + " rows...");
+        Long cardinality = columnIndex.getCardinality();
+        Long sizeInBytes = columnIndex.getSizeInBytes();
+        System.out.println("Index contains " + cardinality + " entries in " + sizeInBytes + " bytes ...");
 
         long lookupStartTime = System.currentTimeMillis();
         Set<Long> indexedValues = columnIndex.lookup(10L, 1000000L);

@@ -30,6 +30,22 @@ public class PagingIndex {
         return index.get(key);
     }
 
+    public Long getCardinality() {
+        Long cardinality =  (long)index.size() * Long.BYTES;
+        for (Map.Entry<Long, Roaring64NavigableMap> entry : index.entrySet()) {
+            cardinality += entry.getValue().getLongCardinality();
+        }
+        return cardinality;
+    }
+
+    public Long getSizeInBytes() {
+        Long size = 0L;
+        for (Map.Entry<Long, Roaring64NavigableMap> entry : index.entrySet()) {
+            size += entry.getValue().getLongSizeInBytes();
+        }
+        return size;
+    }
+
     public Set<Long> lookup(Long limit, Long offset) {
         Long seen = 0L;
         Set<Long> result = new LinkedHashSet<>();
