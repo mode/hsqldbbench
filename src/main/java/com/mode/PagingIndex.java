@@ -1,8 +1,6 @@
 package com.mode;
 
-import org.roaringbitmap.longlong.LongIterator;
 import org.roaringbitmap.longlong.Roaring64NavigableMap;
-import org.roaringbitmap.RoaringBitmap;
 import org.voltdb.VoltTable;
 import org.voltdb.client.Client;
 import org.voltdb.client.ClientResponse;
