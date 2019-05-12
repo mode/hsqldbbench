@@ -93,6 +93,12 @@ public class BenchmarkTaxi {
 
         System.out.println("Total ingest time: " + (ingestEndTime - ingestStartTime) + "ms");
 
+        long indexStartTime = System.currentTimeMillis();
+        buildColumnIndex(voltClient, "trips", "rate_code_id", 1440);
+        long indexEndTime = System.currentTimeMillis();
+
+        System.out.println("Build Column Index Time: " + (indexEndTime - indexStartTime) + "ms");
+
         long tableStartTime = System.currentTimeMillis();
         executeTableQuery(voltClient, "trips");
         long tableEndTime = System.currentTimeMillis();
@@ -257,6 +263,28 @@ public class BenchmarkTaxi {
     /**
      * Selection
      */
+
+    private static void buildColumnIndex(Client voltClient, String tableName, String byColumnName, Integer partCount) throws InterruptedException {
+        ExecutorService indexExecutor = Executors.newFixedThreadPool(72);
+
+        for (Integer i = 1; i <= partCount; i++) {
+            final Integer partNum = i;
+            indexExecutor.submit(() -> {
+                String selectSql = "SELECT id, part, " + byColumnName + " FROM " + tableName + " WHERE part = " + partNum;
+                System.out.println(selectSql);
+
+                try {
+                    voltClient.callProcedure("@AdHoc", selectSql);
+                } catch (IOException|ProcCallException indexException) {
+                    throw new RuntimeException("Couldn't build index", indexException);
+                }
+            });
+        }
+
+        indexExecutor.shutdown();
+        indexExecutor.awaitTermination(30, TimeUnit.SECONDS);
+    }
+
 
     private static ClientResponse executeTableQuery(Client voltClient, String tableName) throws IOException, ProcCallException {
         String selectSql = "SELECT id FROM " + tableName + " LIMIT 100 OFFSET 320000";
