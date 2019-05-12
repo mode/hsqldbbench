@@ -92,19 +92,19 @@ public class BenchmarkTaxi {
         System.out.println("Total ingest time: " + (ingestEndTime - ingestStartTime) + "ms");
 
         long indexStartTime = System.currentTimeMillis();
-        OakPaginatorIndex columnIndex = OakPaginatorIndex.build(
+        PagingIndex columnIndex = PagingIndex.build(
                 voltClient, "trips", partCount, "rate_code_id");
 
+        Long values = 0L;
         for (Long key : columnIndex.keys()) {
-            System.out.println("Index key " + key);
+            Set<Long> ids = columnIndex.get(key);
 
-            for (Long value: columnIndex.get(key)) {
-                System.out.println("Index value " + value);
-            }
+            values += ids.size();
+            System.out.println("Index (key, values) => (" + key + ", " + ids.size() + ")");
         }
         long indexEndTime = System.currentTimeMillis();
 
-        System.out.println("Index contains: " + columnIndex.size() + " items");
+        System.out.println("Index contains " + values + " rows...");
         System.out.println("Build Column Index Time: " + (indexEndTime - indexStartTime) + "ms");
 
         long tableStartTime = System.currentTimeMillis();
@@ -272,7 +272,11 @@ public class BenchmarkTaxi {
 
 
     private static ClientResponse executeTableQuery(Client voltClient, String tableName) throws IOException, ProcCallException {
-        String selectSql = "SELECT id FROM " + tableName + " LIMIT 100 OFFSET 320000";
+        String selectSql =
+                "SELECT id FROM " + tableName +
+                " ORDER BY rate_code_id DESC" +
+                " LIMIT 100 OFFSET 320000";
+
         System.out.println(selectSql);
         return voltClient.callProcedure("@AdHoc", selectSql);
     }
