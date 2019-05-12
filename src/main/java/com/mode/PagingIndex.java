@@ -31,7 +31,7 @@ public class PagingIndex {
     }
 
     public Long getCardinality() {
-        Long cardinality =  (long)index.size() * Long.BYTES;
+        Long cardinality =  0L;
         for (Map.Entry<Long, Roaring64NavigableMap> entry : index.entrySet()) {
             cardinality += entry.getValue().getLongCardinality();
         }
@@ -39,7 +39,7 @@ public class PagingIndex {
     }
 
     public Long getSizeInBytes() {
-        Long size = 0L;
+        Long size = (long)index.size() * Long.BYTES;
         for (Map.Entry<Long, Roaring64NavigableMap> entry : index.entrySet()) {
             size += entry.getValue().getLongSizeInBytes();
         }
@@ -48,7 +48,7 @@ public class PagingIndex {
 
     public Set<Long> lookup(Long limit, Long offset) {
         Long seen = 0L;
-        Set<Long> result = new LinkedHashSet<>();
+        LinkedHashSet<Long> result = new LinkedHashSet<>();
 
         for (Map.Entry<Long, Roaring64NavigableMap> entry : index.entrySet()) {
             if (result.size() >= limit) {
@@ -59,22 +59,44 @@ public class PagingIndex {
 
             Long cardinality = values.getLongCardinality();
 
-            if (seen + cardinality < offset) {
+            if (seen + cardinality <= offset) {
                 seen += cardinality;
                 // Skip over this key
+                System.out.println("IndexSkip[Offset=" + offset + ", Seen=" + seen + ", Cardinality=" + cardinality + "]");
             } else {
-                Long seek = (offset - seen);
-                Long length = cardinality - seek;
+                Long seekStart = 0L;
+                Long seekLength = 0L;
 
-                seen += seek;
-                for (Long pos = seek; pos < length; pos++) {
-                    if (result.size() >= limit) {
-                        break;
-                    }
-
-                    seen += 1;
-                    result.add(values.select(pos));
+                if (offset > seen) {
+                    seekStart = offset - seen;
                 }
+
+                int have = result.size();
+                Long need = limit - have;
+                if (seekStart + need < cardinality) {
+                    // Just what we need
+                    seekLength = need;
+                } else {
+                    // Get the whole buffer
+                    seekLength = cardinality - seekStart;
+                }
+
+                Long seekFinish = seekStart + seekLength;
+
+                System.out.println(
+                        "IndexSeek[Offset=" + offset +
+                        ", Need=" + need +
+                        ", Seen=" + seen +
+                        ", Cardinality=" + cardinality +
+                        ", SeekStart=" + seekStart +
+                        ", SeekLength=" + seekLength +
+                        ", SeekFinish=" + seekFinish + "]");
+
+                for (Long position = seekStart; position < seekFinish; position++) {
+                    result.add(values.select(position));
+                }
+
+                seen += seekStart + seekLength;
             }
         }
 

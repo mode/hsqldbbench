@@ -11,7 +11,6 @@ import org.voltdb.client.VoltBulkLoader.VoltBulkLoader;
 import java.io.*;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
-import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -92,35 +91,34 @@ public class BenchmarkTaxi {
 
         System.out.println("Total ingest time: " + (ingestEndTime - ingestStartTime) + "ms");
 
-        long indexStartTime = System.currentTimeMillis();
-        PagingIndex columnIndex = PagingIndex.build(
-                voltClient, "trips", partCount, "rate_code_id");
-        long indexEndTime = System.currentTimeMillis();
-
-        System.out.println("Index Build Time: " + (indexEndTime - indexStartTime) + "ms");
-
-        Long cardinality = columnIndex.getCardinality();
-        Long sizeInBytes = columnIndex.getSizeInBytes();
-        System.out.println("Index contains " + cardinality + " entries in " + sizeInBytes + " bytes ...");
-
-        long lookupStartTime = System.currentTimeMillis();
-        Set<Long> indexedValues = columnIndex.lookup(10L, 1000000L);
-        long lookupEndTime = System.currentTimeMillis();
-
-        System.out.println(Arrays.toString(indexedValues.toArray()));
-        System.out.println("Index Lookup Time: " + (lookupEndTime - lookupStartTime) + "ms");
-
         long tableStartTime = System.currentTimeMillis();
         executeTableQuery(voltClient, "trips");
         long tableEndTime = System.currentTimeMillis();
 
-        System.out.println("Offset time (warmup): " + (tableEndTime - tableStartTime) + "ms");
+        System.out.println("Pagination time (warmup): " + (tableEndTime - tableStartTime) + "ms");
 
         tableStartTime = System.currentTimeMillis();
         executeTableQuery(voltClient, "trips");
         tableEndTime = System.currentTimeMillis();
 
-        System.out.println("Offset time (warmed): " + (tableEndTime - tableStartTime) + "ms");
+        System.out.println("Pagination time (warmed): " + (tableEndTime - tableStartTime) + "ms");
+
+        long indexStartTime = System.currentTimeMillis();
+        PagingIndex idxByRateCodeId = PagingIndex.build(
+                voltClient, "trips", partCount, "rate_code_id");
+        long indexEndTime = System.currentTimeMillis();
+
+        System.out.println("Index build time: " + (indexEndTime - indexStartTime) + "ms");
+
+        Long cardinality = idxByRateCodeId.getCardinality();
+        Long sizeInBytes = idxByRateCodeId.getSizeInBytes();
+        System.out.println("Index contains " + cardinality + " entries in " + sizeInBytes + " bytes ...");
+
+        long indexedStartTime = System.currentTimeMillis();
+        executeIndexedQuery(voltClient, idxByRateCodeId, "trips");
+        long indexedEndTime = System.currentTimeMillis();
+
+        System.out.println("Indexed Pagination time: " + (indexedEndTime - indexedStartTime) + "ms");
 
         long pivotStartTime = System.currentTimeMillis();
         executePivotQuery(voltClient, "trips");
@@ -279,6 +277,20 @@ public class BenchmarkTaxi {
                 "SELECT id FROM " + tableName +
                 " ORDER BY rate_code_id DESC" +
                 " LIMIT 100 OFFSET 320000";
+
+        System.out.println(selectSql);
+        return voltClient.callProcedure("@AdHoc", selectSql);
+    }
+
+    private static ClientResponse executeIndexedQuery(Client voltClient, PagingIndex index, String tableName) throws IOException, ProcCallException {
+        List<String> idList = new ArrayList<>();
+        for (Long position : index.lookup(100L, 16000000L)) {
+            idList.add(String.valueOf(position));
+        }
+
+        String selectSql = "SELECT * FROM " + tableName +
+                " WHERE id IN (" + String.join(", ", idList) + ")" +
+                " ORDER BY rate_code_id DESC";
 
         System.out.println(selectSql);
         return voltClient.callProcedure("@AdHoc", selectSql);
