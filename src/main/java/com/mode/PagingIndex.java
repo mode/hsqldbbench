@@ -9,6 +9,8 @@ import org.voltdb.client.ProcCallException;
 import java.io.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.stream.Collectors;
+import java.util.stream.LongStream;
 
 
 public class PagingIndex {
@@ -56,37 +58,54 @@ public class PagingIndex {
             }
 
             Roaring64NavigableMap values = entry.getValue();
-
             Long cardinality = values.getLongCardinality();
 
-            if (seen + cardinality <= offset) {
+            if (offset - seen >= cardinality) {
                 seen += cardinality;
-                // Skip over this key
-                System.out.println("IndexSkip[Offset=" + offset + ", Seen=" + seen + ", Cardinality=" + cardinality + "]");
-            } else {
-                Long seekStart = 0L;
-                Long seekLength = 0L;
 
-                if (offset > seen) {
-                    seekStart = offset - seen;
-                }
-
-                int have = result.size();
-                Long need = limit - have;
-                if (seekStart + need < cardinality) {
-                    // Just what we need
-                    seekLength = need;
-                } else {
-                    // Get the whole buffer
-                    seekLength = cardinality - seekStart;
-                }
-
-                Long seekFinish = seekStart + seekLength;
-
-                System.out.println(
-                        "IndexSeek[Offset=" + offset +
-                        ", Need=" + need +
+                // Skip over this entry
+                System.out.println("IndexSkip[" +
+                        "Offset=" + offset +
                         ", Seen=" + seen +
+                        ", Cardinality=" + cardinality + "]");
+
+                continue;
+            }
+
+            Long seekStart = 0L;
+            Long seekLength = 0L;
+            Long seekFinish = cardinality;
+
+            if (offset > seen) {
+                seekStart = offset - seen;
+            }
+
+            Long need = limit - result.size();
+            if (seekStart == 0 && seekStart + need >= cardinality) {
+                // Entire buffer
+                seekLength = cardinality;
+                seekFinish = cardinality;
+
+                System.out.println("IndexSeekCopy[" +
+                        "Offset=" + offset +
+                        ", Seen=" + seen +
+                        ", Need=" + need +
+                        ", Cardinality=" + cardinality +
+                        ", SeekStart=" + seekStart +
+                        ", SeekLength=" + seekLength +
+                        ", SeekFinish=" + seekFinish + "]");
+
+                LongStream stream = LongStream.of(values.toArray());
+                result.addAll(stream.boxed().collect(Collectors.toList()));
+            } else if (seekStart + need >= cardinality) {
+                // Tail of the buffer
+                seekLength = cardinality - seekStart;
+                seekFinish = seekStart + seekLength;
+
+                System.out.println("IndexSeekTail[" +
+                        "Offset=" + offset +
+                        ", Seen=" + seen +
+                        ", Need=" + need +
                         ", Cardinality=" + cardinality +
                         ", SeekStart=" + seekStart +
                         ", SeekLength=" + seekLength +
@@ -95,9 +114,26 @@ public class PagingIndex {
                 for (Long position = seekStart; position < seekFinish; position++) {
                     result.add(values.select(position));
                 }
+            } else {
+                // Head of the buffer
+                seekLength = seekStart + need;
+                seekFinish = seekStart + seekLength;
 
-                seen += seekStart + seekLength;
+                System.out.println("IndexSeekHead[" +
+                        "Offset=" + offset +
+                        ", Seen=" + seen +
+                        ", Need=" + need +
+                        ", Cardinality=" + cardinality +
+                        ", SeekStart=" + seekStart +
+                        ", SeekLength=" + seekLength +
+                        ", SeekFinish=" + seekFinish + "]");
+
+                for (Long position = seekStart; position < seekFinish; position++) {
+                    result.add(values.select(position));
+                }
             }
+
+            seen += seekStart + seekLength;
         }
 
         return result;

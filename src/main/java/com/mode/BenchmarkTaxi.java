@@ -284,9 +284,25 @@ public class BenchmarkTaxi {
 
     private static ClientResponse executeIndexedQuery(Client voltClient, PagingIndex index, String tableName) throws IOException, ProcCallException {
         List<String> idList = new ArrayList<>();
-        for (Long position : index.lookup(100L, 16000000L)) {
+
+        /**
+         * Index contains 16318395 entries in 3077164 bytes ...
+         * IndexSkip[Offset=17000000, Seen=15804198, Cardinality=15804198]
+         * IndexSkip[Offset=17000000, Seen=16180059, Cardinality=375861]
+         * IndexSkip[Offset=17000000, Seen=16214092, Cardinality=34033]
+         * IndexSkip[Offset=17000000, Seen=16224134, Cardinality=10042]
+         * IndexSkip[Offset=17000000, Seen=16317716, Cardinality=93582]
+         * IndexSkip[Offset=17000000, Seen=16317825, Cardinality=109]
+         * IndexSkip[Offset=17000000, Seen=16318395, Cardinality=570]
+         */
+
+        for (Long position : index.lookup(15000L, 16224133L)) {
             idList.add(String.valueOf(position));
         }
+
+//        for (Long position : index.lookup(15000L, 16000000L)) {
+//            idList.add(String.valueOf(position));
+//        }
 
         String selectSql = "SELECT * FROM " + tableName +
                 " WHERE id IN (" + String.join(", ", idList) + ")" +
