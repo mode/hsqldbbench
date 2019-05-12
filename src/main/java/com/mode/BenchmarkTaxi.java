@@ -13,6 +13,7 @@ import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.sql.SQLException;
 import java.util.*;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -45,7 +46,7 @@ public class BenchmarkTaxi {
         put("total_amount", ColumnType.DOUBLE);
     }};
 
-    public static void main(String[] args) throws IOException, InterruptedException, ProcCallException, SQLException {
+    public static void main(String[] args) throws IOException, InterruptedException, ProcCallException, ExecutionException {
         ClientConfig config = new ClientConfig();
 
         config.setTopologyChangeAware(true);
@@ -94,18 +95,26 @@ public class BenchmarkTaxi {
         long indexStartTime = System.currentTimeMillis();
         PagingIndex columnIndex = PagingIndex.build(
                 voltClient, "trips", partCount, "rate_code_id");
+        long indexEndTime = System.currentTimeMillis();
+
+        System.out.println("Index Build Time: " + (indexEndTime - indexStartTime) + "ms");
 
         Long values = 0L;
         for (Long key : columnIndex.keys()) {
-            Set<Long> ids = columnIndex.get(key);
+            int cardinality = columnIndex.get(key).getIntCardinality();
 
-            values += ids.size();
-            System.out.println("Index (key, values) => (" + key + ", " + ids.size() + ")");
+            values += cardinality;
+            System.out.println("Index (key, values) => (" + key + ", " + cardinality + ")");
         }
-        long indexEndTime = System.currentTimeMillis();
 
         System.out.println("Index contains " + values + " rows...");
-        System.out.println("Build Column Index Time: " + (indexEndTime - indexStartTime) + "ms");
+
+        long lookupStartTime = System.currentTimeMillis();
+        Set<Long> indexedValues = columnIndex.lookup(10L, 1000000L);
+        long lookupEndTime = System.currentTimeMillis();
+
+        System.out.println(Arrays.toString(indexedValues.toArray()));
+        System.out.println("Index Lookup Time: " + (lookupEndTime - lookupStartTime) + "ms");
 
         long tableStartTime = System.currentTimeMillis();
         executeTableQuery(voltClient, "trips");

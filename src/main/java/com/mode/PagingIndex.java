@@ -1,21 +1,22 @@
 package com.mode;
 
+import org.roaringbitmap.longlong.LongIterator;
+import org.roaringbitmap.longlong.Roaring64NavigableMap;
+import org.roaringbitmap.RoaringBitmap;
 import org.voltdb.VoltTable;
 import org.voltdb.client.Client;
 import org.voltdb.client.ClientResponse;
 import org.voltdb.client.ProcCallException;
 
 import java.io.*;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.NavigableSet;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.*;
 
-public class PagingIndex {
-    private final ConcurrentSkipListMap<Long, Set<Long>> index;
 
-    public PagingIndex(ConcurrentSkipListMap<Long, Set<Long>> index) {
+public class PagingIndex {
+    private final TreeMap<Long, Roaring64NavigableMap> index;
+
+    public PagingIndex(TreeMap<Long, Roaring64NavigableMap> index) {
         this.index = index;
     }
 
@@ -23,34 +24,61 @@ public class PagingIndex {
         return index.size();
     }
 
-    public Set<Long> get(Long key) {
-        return index.get(key);
-    }
-
-    public NavigableSet<Long> keys() {
+    public Set<Long> keys() {
         return index.keySet();
     }
 
-    public static PagingIndex build(Client voltClient, String tableName, Integer tableParts, String tableColumnName) throws InterruptedException {
-        long constructStartTime = System.currentTimeMillis();
-
-        ConcurrentSkipListMap<Long, Set<Long>> index =
-                constructIndex(voltClient, tableName, tableParts, tableColumnName);
-
-        long constructEndTime = System.currentTimeMillis();
-
-        System.out.println("Total construction time: " + (constructEndTime - constructStartTime) + "ms");
-
-        return new PagingIndex(index);
+    public Roaring64NavigableMap get(Long key) {
+        return index.get(key);
     }
 
-    private static ConcurrentSkipListMap<Long, Set<Long>> constructIndex(Client voltClient, String tableName, Integer tableParts, String tableColumnName) throws InterruptedException {
-        ExecutorService indexExecutor = Executors.newFixedThreadPool(96);
-        ConcurrentSkipListMap<Long, Set<Long>> index = new ConcurrentSkipListMap<>();
+    public Set<Long> lookup(Long limit, Long offset) {
+        Long seen = 0L;
+        Set<Long> result = new LinkedHashSet<>();
+
+        for (Map.Entry<Long, Roaring64NavigableMap> entry : index.entrySet()) {
+            if (result.size() >= limit) {
+                break;
+            }
+
+            Roaring64NavigableMap values = entry.getValue();
+
+            Long cardinality = values.getLongCardinality();
+
+            if (seen + cardinality < offset) {
+                seen += cardinality;
+                // Skip over this key
+            } else {
+                Long seek = (offset - seen);
+                Long length = cardinality - seek;
+
+                seen += seek;
+                for (Long pos = seek; pos < length; pos++) {
+                    if (result.size() >= limit) {
+                        break;
+                    }
+
+                    seen += 1;
+                    result.add(values.select(pos));
+                }
+            }
+        }
+
+        return result;
+    }
+
+
+    public static PagingIndex build(Client voltClient, String tableName, Integer tableParts, String tableColumnName) throws InterruptedException, ExecutionException {
+        return new PagingIndex(constructIndex(voltClient, tableName, tableParts, tableColumnName));
+    }
+
+    private static TreeMap<Long, Roaring64NavigableMap> constructIndex(Client voltClient, String tableName, Integer tableParts, String tableColumnName) throws InterruptedException, ExecutionException {
+        ArrayList<Future<Map<Long, Roaring64NavigableMap>>> indices = new ArrayList<>();
+        ExecutorService indexExecutor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
 
         for (Integer i = 1; i <= tableParts; i++) {
             final Integer partNum = i;
-            indexExecutor.submit(() -> {
+            indices.add(indexExecutor.submit(() -> {
                 String selectSql =
                         "SELECT id, " + tableColumnName +
                         " FROM " + tableName +
@@ -62,14 +90,18 @@ public class PagingIndex {
                     ClientResponse response = voltClient.callProcedure("@AdHoc", selectSql);
 
                     if (response.getStatus() == ClientResponse.SUCCESS) {
+                        Map<Long, Roaring64NavigableMap> keyMap = new HashMap<>();
+
                         for (VoltTable table : response.getResults()) {
                             while(table.advanceRow()) {
                                 Long key = table.getLong(1);
                                 Long value = table.getLong(0);
-                                index.computeIfAbsent(key, k
-                                        -> new ConcurrentSkipListSet<>()).add(value);
+                                keyMap.computeIfAbsent(key, absentKey
+                                        -> new Roaring64NavigableMap()).add(value);
                             }
                         }
+
+                        return keyMap;
                     } else {
                         System.out.println(response.getStatusString());
                         throw new RuntimeException(response.getStatusString());
@@ -78,12 +110,21 @@ public class PagingIndex {
                     System.out.println(indexException.toString());
                     throw new RuntimeException("Couldn't build index", indexException);
                 }
-            });
+            }));
         }
 
         indexExecutor.shutdown();
         indexExecutor.awaitTermination(30, TimeUnit.SECONDS);
 
-        return index;
+        /// Merge all the maps into one
+        TreeMap<Long, Roaring64NavigableMap> merged = new TreeMap<>();
+        for (Future<Map<Long, Roaring64NavigableMap>> index : indices) {
+            for (Map.Entry<Long, Roaring64NavigableMap> entry : index.get().entrySet()) {
+                merged.computeIfAbsent(entry.getKey(), absentKey
+                        -> new Roaring64NavigableMap()).or(entry.getValue());
+            }
+        }
+
+        return merged;
     }
 }
