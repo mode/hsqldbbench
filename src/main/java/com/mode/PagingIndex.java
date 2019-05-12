@@ -53,7 +53,9 @@ public class PagingIndex {
         LinkedHashSet<Long> result = new LinkedHashSet<>();
 
         for (Map.Entry<Long, Roaring64NavigableMap> entry : index.entrySet()) {
-            if (result.size() >= limit) {
+            Long need = limit - result.size();
+
+            if (need <= 0) {
                 break;
             }
 
@@ -61,26 +63,25 @@ public class PagingIndex {
             Long cardinality = values.getLongCardinality();
 
             if (offset - seen >= cardinality) {
-                seen += cardinality;
-
                 // Skip over this entry
                 System.out.println("IndexSkip[" +
                         "Offset=" + offset +
                         ", Seen=" + seen +
                         ", Cardinality=" + cardinality + "]");
 
+                seen += cardinality;
+
                 continue;
             }
 
             Long seekStart = 0L;
             Long seekLength = 0L;
-            Long seekFinish = cardinality;
+            Long seekFinish = 0L;
 
             if (offset > seen) {
                 seekStart = offset - seen;
             }
 
-            Long need = limit - result.size();
             if (seekStart == 0 && seekStart + need >= cardinality) {
                 // Entire buffer
                 seekLength = cardinality;
@@ -99,8 +100,8 @@ public class PagingIndex {
                 result.addAll(stream.boxed().collect(Collectors.toList()));
             } else if (seekStart + need >= cardinality) {
                 // Tail of the buffer
+                seekFinish = cardinality;
                 seekLength = cardinality - seekStart;
-                seekFinish = seekStart + seekLength;
 
                 System.out.println("IndexSeekTail[" +
                         "Offset=" + offset +
@@ -116,7 +117,7 @@ public class PagingIndex {
                 }
             } else {
                 // Head of the buffer
-                seekLength = seekStart + need;
+                seekLength = need;
                 seekFinish = seekStart + seekLength;
 
                 System.out.println("IndexSeekHead[" +
