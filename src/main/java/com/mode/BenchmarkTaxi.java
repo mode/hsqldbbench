@@ -11,6 +11,7 @@ import org.voltdb.client.VoltBulkLoader.VoltBulkLoader;
 import java.io.*;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -19,35 +20,32 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.zip.GZIPInputStream;
 
 public class BenchmarkTaxi {
-    private enum DataType {
-        INTEGER, DOUBLE, STRING, TIMESTAMP
-    }
-
     private static AtomicLong rowId = new AtomicLong(0);
 
+    private final static Integer partCount = 8;
     private final static DateTimeFormatter dtFormat = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss");
 
-    private final static Map<String, DataType> schema = new LinkedHashMap<String, DataType>() {{
-        put("vendor_id", DataType.INTEGER);
-        put("pickup_datetime", DataType.TIMESTAMP);
-        put("dropoff_datetime", DataType.TIMESTAMP);
-        put("passenger_count", DataType.INTEGER);
-        put("trip_distance", DataType.DOUBLE);
-        put("rate_code_id", DataType.INTEGER);
-        put("store_and_fwd_flag", DataType.STRING);
-        put("dropoff_longitude", DataType.DOUBLE);
-        put("dropoff_latitude", DataType.DOUBLE);
-        put("payment_type", DataType.INTEGER);
-        put("fare_amount", DataType.DOUBLE);
-        put("extra", DataType.DOUBLE);
-        put("mta_tax", DataType.DOUBLE);
-        put("tip_amount", DataType.DOUBLE);
-        put("tolls_amount", DataType.DOUBLE);
-        put("improvement_surcharge", DataType.DOUBLE);
-        put("total_amount", DataType.DOUBLE);
+    private final static Map<String, ColumnType> schema = new LinkedHashMap<String, ColumnType>() {{
+        put("vendor_id", ColumnType.INTEGER);
+        put("pickup_datetime", ColumnType.TIMESTAMP);
+        put("dropoff_datetime", ColumnType.TIMESTAMP);
+        put("passenger_count", ColumnType.INTEGER);
+        put("trip_distance", ColumnType.DOUBLE);
+        put("rate_code_id", ColumnType.INTEGER);
+        put("store_and_fwd_flag", ColumnType.STRING);
+        put("dropoff_longitude", ColumnType.DOUBLE);
+        put("dropoff_latitude", ColumnType.DOUBLE);
+        put("payment_type", ColumnType.INTEGER);
+        put("fare_amount", ColumnType.DOUBLE);
+        put("extra", ColumnType.DOUBLE);
+        put("mta_tax", ColumnType.DOUBLE);
+        put("tip_amount", ColumnType.DOUBLE);
+        put("tolls_amount", ColumnType.DOUBLE);
+        put("improvement_surcharge", ColumnType.DOUBLE);
+        put("total_amount", ColumnType.DOUBLE);
     }};
 
-    public static void main(String[] args) throws IOException, InterruptedException, ProcCallException {
+    public static void main(String[] args) throws IOException, InterruptedException, ProcCallException, SQLException {
         ClientConfig config = new ClientConfig();
 
         config.setTopologyChangeAware(true);
@@ -56,12 +54,12 @@ public class BenchmarkTaxi {
         ExecutorService ingestExecutor = Executors.newFixedThreadPool(24);
 
         long connectStartTime = System.currentTimeMillis();
-//        voltClient.createConnection("localhost", 21212);
-        voltClient.createConnection("ip-10-77-2-149.us-west-2.compute.internal", 21212);
-        voltClient.createConnection("ip-10-77-2-77.us-west-2.compute.internal", 21212);
-        voltClient.createConnection("ip-10-77-2-154.us-west-2.compute.internal", 21212);
-        voltClient.createConnection("ip-10-77-2-116.us-west-2.compute.internal", 21212);
-        voltClient.createConnection("ip-10-77-2-59.us-west-2.compute.internal", 21212);
+        voltClient.createConnection("localhost", 21212);
+//        voltClient.createConnection("ip-10-77-2-149.us-west-2.compute.internal", 21212);
+//        voltClient.createConnection("ip-10-77-2-77.us-west-2.compute.internal", 21212);
+//        voltClient.createConnection("ip-10-77-2-154.us-west-2.compute.internal", 21212);
+//        voltClient.createConnection("ip-10-77-2-116.us-west-2.compute.internal", 21212);
+//        voltClient.createConnection("ip-10-77-2-59.us-west-2.compute.internal", 21212);
 
         long connectionEndTime = System.currentTimeMillis();
 
@@ -94,9 +92,19 @@ public class BenchmarkTaxi {
         System.out.println("Total ingest time: " + (ingestEndTime - ingestStartTime) + "ms");
 
         long indexStartTime = System.currentTimeMillis();
-        buildColumnIndex(voltClient, "trips", "rate_code_id", 1440);
+        OakPaginatorIndex columnIndex = OakPaginatorIndex.build(
+                voltClient, "trips", partCount, "rate_code_id");
+
+        for (Long key : columnIndex.keys()) {
+            System.out.println("Index key " + key);
+
+            for (Long value: columnIndex.get(key)) {
+                System.out.println("Index value " + value);
+            }
+        }
         long indexEndTime = System.currentTimeMillis();
 
+        System.out.println("Index contains: " + columnIndex.size() + " items");
         System.out.println("Build Column Index Time: " + (indexEndTime - indexStartTime) + "ms");
 
         long tableStartTime = System.currentTimeMillis();
@@ -182,7 +190,7 @@ public class BenchmarkTaxi {
         }
     }
 
-    private static void ingestCsvFile(Client voltClient, Map<String, DataType> schema, String tableName, String csvFilePath) throws IOException, InterruptedException {
+    private static void ingestCsvFile(Client voltClient, Map<String, ColumnType> schema, String tableName, String csvFilePath) throws IOException, InterruptedException {
         VoltBulkLoader loader;
 
         try {
@@ -209,7 +217,6 @@ public class BenchmarkTaxi {
 
         Integer colNum = 0;
         Integer partMin = 1;
-        Integer partCount = 1440;
         Random partRandom = new Random();
 
         String[] csvRow;
@@ -226,7 +233,7 @@ public class BenchmarkTaxi {
                 String rowValue = csvRow[colNum];
                 Map.Entry pair = (Map.Entry) colIter.next();
 
-                switch((DataType) pair.getValue()) {
+                switch((ColumnType) pair.getValue()) {
                     case STRING:
                         voltRow.add(rowValue);
                         break;
@@ -259,31 +266,9 @@ public class BenchmarkTaxi {
         }
     }
 
-
     /**
      * Selection
      */
-
-    private static void buildColumnIndex(Client voltClient, String tableName, String byColumnName, Integer partCount) throws InterruptedException {
-        ExecutorService indexExecutor = Executors.newFixedThreadPool(72);
-
-        for (Integer i = 1; i <= partCount; i++) {
-            final Integer partNum = i;
-            indexExecutor.submit(() -> {
-                String selectSql = "SELECT id, part, " + byColumnName + " FROM " + tableName + " WHERE part = " + partNum;
-                System.out.println(selectSql);
-
-                try {
-                    voltClient.callProcedure("@AdHoc", selectSql);
-                } catch (IOException|ProcCallException indexException) {
-                    throw new RuntimeException("Couldn't build index", indexException);
-                }
-            });
-        }
-
-        indexExecutor.shutdown();
-        indexExecutor.awaitTermination(30, TimeUnit.SECONDS);
-    }
 
 
     private static ClientResponse executeTableQuery(Client voltClient, String tableName) throws IOException, ProcCallException {
